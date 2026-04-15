@@ -57,13 +57,17 @@ def _guess_provider(base_url: str, requested_provider: str) -> str:
 def _request_overrides(generation: Dict[str, Any]) -> Dict[str, Any]:
     overrides: Dict[str, Any] = {}
 
+    # The pinned Hermes runtime forwards request_overrides directly into its
+    # OpenAI-compatible completions client. That client rejects
+    # request_timeout_seconds as an unexpected kwarg, so keep timeout
+    # enforcement at the verifier process level instead of passing it through
+    # as a model override.
     for key in (
         "temperature",
         "top_p",
         "top_k",
         "min_p",
         "repetition_penalty",
-        "request_timeout_seconds",
         "max_tokens",
     ):
         value = generation.get(key)

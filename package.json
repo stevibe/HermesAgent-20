@@ -1,6 +1,6 @@
 {
   "name": "hermesagent-20",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "BenchLocal Bench Pack scaffold for Hermes agent runtime evaluation.",
   "license": "MIT",
   "scripts": {

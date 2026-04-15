@@ -108,8 +108,14 @@ Important consequences:
 - the host runtime should assume only Node.js is available
 - any Hermes-specific installation or runtime dependency belongs in the verifier container
 - the official pack should treat direct provider wiring inside the pack as an implementation fallback at most, not the intended architecture
+- the public pack manifest should declare a minimum BenchLocal client version and the required host features so incompatible clients fail early
 
 The benchmark therefore measures Hermes runtime behavior while preserving BenchLocal's ownership of inference.
+
+For the public HermesAgent-20 release, the manifest requirement is:
+
+- BenchLocal `>= 0.2.0`
+- host features: `inferenceEndpoints`, `dockerInferenceEndpoints`
 
 ---
 

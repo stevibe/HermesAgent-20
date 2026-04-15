@@ -63,9 +63,12 @@ This keeps the pack architecture clean:
 ## BenchLocal Integration Notes
 
 - This pack requires a Docker verifier.
+- This pack requires BenchLocal `>= 0.2.0`.
 - The host runtime expects BenchLocal to provide `inferenceEndpoints`.
 - Official verifier runs use the Docker-reachable endpoint, typically `dockerBaseUrl`, not the host-only URL.
+- The manifest declares the required host features explicitly: `inferenceEndpoints`, `dockerInferenceEndpoints`.
 - The pack should not require users to configure separate Hermes provider credentials.
+- Older BenchLocal clients should now surface this pack as incompatible instead of failing later during runtime setup.
 
 ## Development
 

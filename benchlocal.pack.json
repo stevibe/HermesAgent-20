@@ -4,9 +4,15 @@
   "id": "hermesagent-20",
   "name": "HermesAgent-20",
   "author": "stevibe",
-  "version": "0.1.0",
-  "description": "Executable BenchLocal pack for verifying Hermes runtime behavior with deterministic artifacts.",
+  "version": "1.0.0",
+  "description": "Executable Hermes agent benchmark with deterministic artifact, trace, memory, browser, cron, and verifier-backed evaluation across 20 scenarios.",
   "entry": "./dist/benchlocal/index.js",
+  "requirements": {
+    "benchlocal": {
+      "minVersion": "0.2.0"
+    },
+    "hostFeatures": ["inferenceEndpoints", "dockerInferenceEndpoints"]
+  },
   "samplingDefaults": {
     "temperature": 0
   },

@@ -184,7 +184,7 @@ const prepared = await benchPack.prepare({
   protocolVersion: 1,
   benchPack: {
     id: "hermesagent-20",
-    version: "0.1.0",
+    version: "1.0.0",
     installDir: process.cwd(),
     dataDir: path.join(os.tmpdir(), "hermesagent-20-data"),
     cacheDir: path.join(os.tmpdir(), "hermesagent-20-cache"),
