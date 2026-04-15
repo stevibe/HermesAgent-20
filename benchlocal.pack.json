@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": 1,
+  "id": "hermesagent-20",
+  "name": "HermesAgent-20",
+  "author": "stevibe",
+  "version": "0.1.0",
+  "description": "Executable BenchLocal pack for verifying Hermes runtime behavior with deterministic artifacts.",
+  "entry": "./dist/benchlocal/index.js",
+  "samplingDefaults": {
+    "temperature": 0
+  },
+  "theme": {
+    "accent": "#7b5cff"
+  },
+  "capabilities": {
+    "tools": true,
+    "multiTurn": true,
+    "streamingProgress": true,
+    "verification": true
+  },
+  "verifiers": [
+    {
+      "id": "verifier",
+      "transport": "http",
+      "required": true,
+      "defaultMode": "docker",
+      "docker": {
+        "buildContext": "./verification",
+        "listenPort": 4010,
+        "healthcheckPath": "/health"
+      }
+    }
+  ]
+}

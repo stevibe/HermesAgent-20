@@ -1,0 +1,21 @@
+{
+  "name": "hermesagent-20",
+  "version": "0.1.0",
+  "description": "BenchLocal Bench Pack scaffold for Hermes agent runtime evaluation.",
+  "license": "MIT",
+  "scripts": {
+    "build:benchlocal": "tsc -p tsconfig.benchlocal.json && tsc-alias -p tsconfig.benchlocal.json",
+    "dev:run": "npm run build:benchlocal && node scripts/run-scenarios.mjs",
+    "smoke:local": "npm run build:benchlocal && node scripts/smoke-probe.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@benchlocal/core": "0.2.0",
+    "@benchlocal/sdk": "0.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "tsc-alias": "^1.8.10",
+    "typescript": "latest"
+  }
+}
