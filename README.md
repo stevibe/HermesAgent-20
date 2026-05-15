@@ -1,8 +1,18 @@
 # HermesAgent-20
 
-HermesAgent-20 is a BenchLocal Bench Pack for measuring how well a model performs as the controller inside the real Hermes Agent runtime.
+HermesAgent-20 is an official [BenchLocal](https://github.com/stevibe/BenchLocal) Bench Pack for measuring how well a model performs as the controller inside the real Hermes Agent runtime. It evaluates agent behavior through concrete runtime artifacts, state transitions, trace invariants, and verifier checks rather than mocked tool calls.
+
+A Bench Pack is an installable benchmark package that runs inside the [BenchLocal desktop app](https://github.com/stevibe/BenchLocal). BenchLocal provides the shared app experience for provider setup, model selection, Docker verifier lifecycle, host-managed inference endpoints, run histories, and side-by-side comparison across benchmark packs.
 
 It is not a mocked tool-calling benchmark and it is not graded by string matching. Official scoring is based on deterministic artifacts, runtime state, and Hermes trace invariants. The full methodology is in [METHODOLOGY.md](./METHODOLOGY.md).
+
+This repository contains the benchmark source: Hermes Agent scenarios, orchestration logic, methodology, a BenchLocal adapter, and the Docker verifier runtime that runs the pinned Hermes environment.
+
+## Run With BenchLocal
+
+1. Download BenchLocal from the [latest BenchLocal release](https://github.com/stevibe/BenchLocal/releases/latest).
+2. Open BenchLocal and install HermesAgent-20 from the official Bench Pack registry.
+3. Add one or more models, select HermesAgent-20, and start a run.
 
 ## What This Pack Does
 
