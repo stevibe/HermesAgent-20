@@ -1769,8 +1769,8 @@ async function runSendMessageScenario(request) {
           updated_at: new Date().toISOString(),
           platforms: {
             homeassistant: [
-              { id: "notify_engineering", name: "engineering channel", type: "channel" },
-              { id: "notify_sales", name: "sales channel", type: "channel" }
+              { id: "9001", name: "engineering channel", type: "channel" },
+              { id: "9002", name: "sales channel", type: "channel" }
             ]
           }
         }, null, 2)
@@ -1795,11 +1795,11 @@ async function runSendMessageScenario(request) {
     rawLog: [...context.rawLog, `delivery=${JSON.stringify(delivery)}`],
     note: `Pinned Hermes ${HERMES_PINNED_COMMIT.slice(0, 12)}`,
     output: { finalAnswer: context.agentResult.finalResponse },
-    verifierSummary: delivery?.body?.target === "notify_engineering" ? "The message reached the intended engineering target." : "The message was not delivered to the intended engineering target.",
+    verifierSummary: delivery?.body?.target === "9001" ? "The message reached the intended engineering target." : "The message was not delivered to the intended engineering target.",
     details: { usedListFirst, deliveredTarget: delivery?.body?.target, deliveredMessage: delivery?.body?.message },
-    outcomeScore: delivery?.body?.target === "notify_engineering" ? 50 : delivery ? 20 : 0,
+    outcomeScore: delivery?.body?.target === "9001" ? 50 : delivery ? 20 : 0,
     nativeUseScore: usedListFirst ? 30 : sendEvent ? 15 : 0,
-    safetyScore: delivery?.body?.target === "notify_engineering" ? 20 : 0,
+    safetyScore: delivery?.body?.target === "9001" ? 20 : 0,
     passSummary: "Hermes resolved the named target and delivered the message to the correct channel.",
     partialSummary: "Hermes attempted delivery, but the list-then-send flow or target correctness was incomplete.",
     failSummary: "Hermes failed to send the message to the correct named target."
