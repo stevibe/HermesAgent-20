@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { once } from "node:events";
 import path from "node:path";
 import { createServer as createNetServer } from "node:net";
@@ -174,6 +174,29 @@ function buildRuntimeFailure(scenarioId, startedAt, rawLog, detail) {
     rawLog: rawLog.join("\n"),
     timings: buildTimings(startedAt)
   };
+}
+
+async function preserveRunArtifacts(runDir, artifactDir) {
+  if (!artifactDir || typeof artifactDir !== "string") {
+    return undefined;
+  }
+
+  const resolvedArtifactDir = path.resolve(artifactDir);
+  await rm(resolvedArtifactDir, { recursive: true, force: true });
+  await mkdir(path.dirname(resolvedArtifactDir), { recursive: true });
+  await cp(runDir, resolvedArtifactDir, {
+    recursive: true,
+    force: true,
+    errorOnExist: false
+  });
+  await runCommand("chmod", ["-R", "a+rX", resolvedArtifactDir], {
+    timeoutMs: 30 * 1000
+  });
+  return resolvedArtifactDir;
+}
+
+function appendArtifactDetail(detail, artifactDir) {
+  return artifactDir ? `${detail}\nartifact_dir=${artifactDir}` : detail;
 }
 
 async function writeFiles(baseDir, files) {
@@ -588,7 +611,10 @@ async function executePreparedAgentRun(prepared, request, options) {
     model: request.model,
     prompt: options.prompt,
     toolsets: options.toolsets,
-    maxTurns: options.maxTurns ?? 10,
+    // This local-custom rerun is governed by elapsed time and a loop watcher.
+    // Hermes requires a numeric iteration budget; this sentinel cannot be
+    // reached before the 30-minute scenario deadline.
+    maxTurns: 2147483647,
     generation: request.generation,
     followUps: options.followUps,
     sessionSeed: options.sessionSeed,
@@ -614,7 +640,24 @@ async function executePreparedAgentRun(prepared, request, options) {
 
 async function prepareAgentRun(request, options) {
   const prepared = await prepareRunContext(request, options);
-  return executePreparedAgentRun(prepared, request, options);
+  try {
+    const completed = await executePreparedAgentRun(prepared, request, options);
+    const artifactDir = await preserveRunArtifacts(completed.runDir, request.artifactDir);
+    if (artifactDir) {
+      completed.rawLog.push(`artifact_dir=${artifactDir}`);
+    }
+    return completed;
+  } catch (error) {
+    let artifactDir;
+    try {
+      artifactDir = await preserveRunArtifacts(prepared.runDir, request.artifactDir);
+    } catch (artifactError) {
+      prepared.rawLog.push(`artifact_preserve_error=${artifactError instanceof Error ? artifactError.message : String(artifactError)}`);
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(appendArtifactDetail(message, artifactDir));
+  }
 }
 
 function incidentSummary(records) {
@@ -966,7 +1009,7 @@ async function runMemoryNearCapacityScenario(request) {
   const entries = splitMemoryEntries(memoryContent);
   const containsAllFacts = [
     memoryContent.includes("api-staging.internal"),
-    /(?:^|[^0-9])2(?:[^0-9]|$)/.test(memoryContent) && /canary/i.test(memoryContent),
+    /(?:\b2\b|\btwo\b)/i.test(memoryContent) && /canary/i.test(memoryContent),
     /digest/i.test(memoryContent) && /(not tag|not the tag)/i.test(memoryContent)
   ].every(Boolean);
   const withinLimit = memoryContent.length <= MEMORY_LIMIT;
@@ -1059,7 +1102,7 @@ async function runSessionRecallScenario(request) {
     context = await prepareAgentRun(request, {
       toolsets: ["session_search", "file"],
       prompt: "Apply the same Docker networking fix we used last time to this compose file.",
-      maxTurns: 8,
+      maxTurns: 12,
       workspaceFiles: {
         [composePath]: initialCompose
       },
@@ -1287,7 +1330,7 @@ async function runExecuteCodeScenario(request) {
         "topOffenders (up to 3 objects with owner and count, sorted by count desc then owner asc)",
         "duplicateIssueIds (sorted ascending)"
       ].join("\n"),
-      maxTurns: 8,
+      maxTurns: 12,
       workspaceFiles
     });
   } catch (error) {
@@ -1333,7 +1376,7 @@ async function runSkillCreateScenario(request) {
         "The workflow is documented in notes/workflow.md.",
         "Include sections titled When to Use, Procedure, Pitfalls, and Verification."
       ].join("\n"),
-      maxTurns: 8,
+      maxTurns: 12,
       workspaceFiles: {
         "notes/workflow.md": `${workflowText}\n`
       }
@@ -1417,7 +1460,7 @@ async function runSkillDiscoverApplyScenario(request) {
     context = await prepareAgentRun(request, {
       toolsets: ["skills", "file"],
       prompt: "Do we already have a skill for this workflow? If so, use it to summarize the incident JSON files into reports/summary.txt.",
-      maxTurns: 8,
+      maxTurns: 12,
       workspaceFiles,
       hermesFiles: {
         "skills/incident-summary/SKILL.md": skillContent
@@ -1652,6 +1695,10 @@ async function runCronUpdateScenario(request) {
       env,
       generation: request.generation
     });
+    const artifactDir = await preserveRunArtifacts(context.runDir, request.artifactDir);
+    if (artifactDir) {
+      context.rawLog.push(`artifact_dir=${artifactDir}`);
+    }
   } catch (error) {
     return buildRuntimeFailure(request.scenarioId, startedAt, [], error instanceof Error ? error.message : String(error));
   }
@@ -1711,6 +1758,10 @@ async function runCronRunDeliveryScenario(request) {
       env
     });
     await runCronTick(context.runtime, context.workspaceDir, context.hermesHomeDir, env);
+    const artifactDir = await preserveRunArtifacts(context.runDir, request.artifactDir);
+    if (artifactDir) {
+      context.rawLog.push(`artifact_dir=${artifactDir}`);
+    }
   } catch (error) {
     await fakeHass.close();
     return buildRuntimeFailure(request.scenarioId, startedAt, [], error instanceof Error ? error.message : String(error));

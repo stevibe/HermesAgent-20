@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+import hashlib
 import json
 import os
 import sys
+import threading
+import time
 import traceback
 import uuid
 from pathlib import Path
@@ -69,6 +72,8 @@ def _request_overrides(generation: Dict[str, Any]) -> Dict[str, Any]:
         "min_p",
         "repetition_penalty",
         "max_tokens",
+        "reasoning_effort",
+        "extra_body",
     ):
         value = generation.get(key)
         if value is not None:
@@ -176,6 +181,26 @@ def main() -> int:
     os.environ["HERMES_HOME"] = str(Path(request["hermesHomeDir"]).resolve())
     os.environ["HERMES_WRITE_SAFE_ROOT"] = str(Path(request["workspaceDir"]).resolve())
     os.environ["HERMES_INTERACTIVE"] = "1"
+    # The verifier starts Node through a login shell, which can replace PATH
+    # with the system default. Make terminal commands resolve the same Python
+    # environment that launched this runner and that the verifier uses.
+    # Do not resolve this path: virtualenv's python is a symlink to the base
+    # interpreter, while its containing bin directory is the PATH entry that
+    # exposes pytest and the other verifier-installed console tools.
+    runner_bin_dir = str(Path(sys.executable).parent)
+    current_path = os.environ.get("PATH", "")
+    if runner_bin_dir not in current_path.split(os.pathsep):
+        os.environ["PATH"] = os.pathsep.join(
+            entry for entry in (runner_bin_dir, current_path) if entry
+        )
+    # LocalEnvironment snapshots a *login* shell before the first terminal
+    # call. /etc/profile resets PATH there, so give the isolated subprocess
+    # home a profile that restores the verifier venv for every terminal turn.
+    terminal_home = Path(os.environ["HERMES_HOME"]) / "home"
+    terminal_home.mkdir(parents=True, exist_ok=True)
+    (terminal_home / ".bash_profile").write_text(
+        f'export PATH="{runner_bin_dir}:$PATH"\n', encoding="utf-8"
+    )
 
     session_id = str(request.get("sessionId") or uuid.uuid4())
     os.environ["HERMES_SESSION_KEY"] = session_id
@@ -184,6 +209,30 @@ def main() -> int:
     approval_events: List[Dict[str, Any]] = []
     clarify_events: List[Dict[str, Any]] = []
     event_order = 0
+    event_lock = threading.Lock()
+    loop_signatures: List[str] = []
+    loop_stop: Optional[Dict[str, Any]] = None
+    agent_ref: Dict[str, Any] = {}
+    trace_path = result_path.parent / "tool-trace.jsonl"
+    began = time.monotonic()
+
+    def _append_tool_trace(event: Dict[str, Any]) -> None:
+        with trace_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def _repeated_tool_cycle(signatures: List[str]) -> Optional[Dict[str, int]]:
+        # A repeated *action and identical result* is evidence of no progress.
+        # Require four repeats of one action or three repeats of a 2-4 action cycle.
+        for length in range(1, 5):
+            repeats = 4 if length == 1 else 3
+            window = length * repeats
+            if len(signatures) < window:
+                continue
+            tail = signatures[-window:]
+            if all(tail[i * length:(i + 1) * length] == tail[:length]
+                   for i in range(1, repeats)):
+                return {"cycleLength": length, "repetitions": repeats}
+        return None
 
     session_db = SessionDB(Path(os.environ["HERMES_HOME"]) / "state.db")
 
@@ -192,26 +241,43 @@ def main() -> int:
 
         def _tool_started(tool_call_id: str, name: str, args: Dict[str, Any]) -> None:
             nonlocal event_order
-            event_order += 1
-            tool_events.append({
-                "phase": "start",
-                "order": event_order,
-                "toolCallId": tool_call_id,
-                "name": name,
-                "args": _jsonable(args),
-            })
+            with event_lock:
+                event_order += 1
+                event = {"phase": "start", "order": event_order,
+                         "toolCallId": tool_call_id, "name": name,
+                         "args": _jsonable(args)}
+                tool_events.append(event)
+                _append_tool_trace({"phase": "start", "order": event_order,
+                                    "toolCallId": tool_call_id, "name": name,
+                                    "elapsedSeconds": time.monotonic() - began})
 
         def _tool_completed(tool_call_id: str, name: str, args: Dict[str, Any], result: Any) -> None:
-            nonlocal event_order
-            event_order += 1
-            tool_events.append({
-                "phase": "complete",
-                "order": event_order,
-                "toolCallId": tool_call_id,
-                "name": name,
-                "args": _jsonable(args),
-                "result": _jsonable(result),
-            })
+            nonlocal event_order, loop_stop
+            normalized_args = _jsonable(args)
+            normalized_result = _jsonable(result)
+            payload = json.dumps([name, normalized_args, normalized_result],
+                                 ensure_ascii=False, sort_keys=True, default=str)
+            signature = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            with event_lock:
+                event_order += 1
+                event = {"phase": "complete", "order": event_order,
+                         "toolCallId": tool_call_id, "name": name,
+                         "args": normalized_args, "result": normalized_result}
+                tool_events.append(event)
+                loop_signatures.append(signature)
+                _append_tool_trace({"phase": "complete", "order": event_order,
+                                    "toolCallId": tool_call_id, "name": name,
+                                    "actionResultSha256": signature,
+                                    "elapsedSeconds": time.monotonic() - began})
+                cycle = _repeated_tool_cycle(loop_signatures) if loop_stop is None else None
+                if cycle:
+                    loop_stop = {"reason": "repeated-identical-tool-action-and-result",
+                                 "toolCallsCompleted": len(loop_signatures),
+                                 "elapsedSeconds": time.monotonic() - began,
+                                 "lastTool": name, **cycle}
+                    _write_json(result_path.parent / "loop-stop.json", loop_stop)
+            if cycle and agent_ref.get("agent") is not None:
+                agent_ref["agent"].interrupt("Benchmark loop watcher detected repeated identical tool results")
 
         follow_ups = request.get("followUps") or {}
         def _next_order() -> int:
@@ -226,10 +292,15 @@ def main() -> int:
         model = request.get("model") or {}
         inference_base_url = str(model.get("inferenceBaseUrl") or "")
         provider = _guess_provider(inference_base_url, str(model.get("provider") or ""))
+        api_key = (
+            model.get("apiKey")
+            or os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
 
         agent = AIAgent(
             base_url=inference_base_url,
-            api_key=model.get("apiKey"),
+            api_key=api_key,
             provider=provider,
             model=str(model.get("exposedModel") or model.get("providerModel") or ""),
             max_iterations=int(request.get("maxTurns") or 10),
@@ -245,6 +316,7 @@ def main() -> int:
             clarify_callback=clarify_callback,
             persist_session=True,
         )
+        agent_ref["agent"] = agent
 
         result = agent.run_conversation(str(request.get("prompt") or ""))
 
@@ -252,7 +324,7 @@ def main() -> int:
             "ok": True,
             "sessionId": session_id,
             "finalResponse": result.get("final_response"),
-            "completed": bool(result.get("completed")),
+            "completed": bool(result.get("completed")) and loop_stop is None,
             "partial": bool(result.get("partial")),
             "messages": _jsonable(result.get("messages") or []),
             "toolEvents": tool_events,
@@ -264,6 +336,8 @@ def main() -> int:
             "model": result.get("model"),
             "inputTokens": result.get("input_tokens"),
             "outputTokens": result.get("output_tokens"),
+            "toolCallsCompleted": len(loop_signatures),
+            "loopStop": loop_stop,
         })
         return 0
     except BaseException as error:

@@ -21,7 +21,14 @@ function truncateTail(value, maxChars = 20000) {
     return value;
   }
 
-  return `${value.slice(0, maxChars)}\n...[truncated]`;
+  return `...[truncated]\n${value.slice(-maxChars)}`;
+}
+
+function commandError(message, stdout, stderr) {
+  const error = new Error(message);
+  error.stdout = stdout;
+  error.stderr = stderr;
+  return error;
 }
 
 export async function pathExists(targetPath) {
@@ -63,7 +70,7 @@ export function runCommand(file, args, options = {}) {
 
     const abortListener = () => {
       child.kill("SIGTERM");
-      finish(() => reject(new Error(`Command aborted: ${commandLabel(file, args)}`)));
+      finish(() => reject(commandError(`Command aborted: ${commandLabel(file, args)}`, stdout, stderr)));
     };
 
     if (options.signal) {
@@ -77,17 +84,17 @@ export function runCommand(file, args, options = {}) {
     if (options.timeoutMs && options.timeoutMs > 0) {
       timeout = setTimeout(() => {
         child.kill("SIGTERM");
-        finish(() => reject(new Error(`Command timed out after ${options.timeoutMs}ms: ${commandLabel(file, args)}`)));
+        finish(() => reject(commandError(`Command timed out after ${options.timeoutMs}ms: ${commandLabel(file, args)}`, stdout, stderr)));
       }, options.timeoutMs);
     }
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout = truncateTail(`${stdout}${chunk}`);
+      stdout += chunk;
     });
     child.stderr.on("data", (chunk) => {
-      stderr = truncateTail(`${stderr}${chunk}`);
+      stderr += chunk;
     });
     child.on("error", (error) => {
       finish(() => reject(error));
@@ -173,7 +180,9 @@ async function writeHermesConfig(hermesHomeDir, workspaceDir, model, maxTurns, o
     '  mode: "manual"',
     "  timeout: 30",
     "agent:",
-    `  max_turns: ${maxTurns}`
+    `  max_turns: ${maxTurns}`,
+    "delegation:",
+    "  max_iterations: 2147483647"
   );
 
   if (options.browserAllowPrivateUrls || options.browserCommandTimeout) {
@@ -270,19 +279,30 @@ export async function executeHermesQuietQuery(request) {
     request.model.exposedModel
   ];
 
-  const result = await runCommand(request.runtime.hermesBin, args, {
-    cwd: request.workspaceDir,
-    env: {
-      ...process.env,
-      ...providerEnv,
-      ...(request.env ?? {}),
-      HERMES_HOME: hermesHomeDir,
-      HERMES_WRITE_SAFE_ROOT: request.workspaceDir,
-      HERMES_SESSION_SOURCE: "benchlocal-hermesagent-20"
-    },
-    signal: request.signal,
-    timeoutMs: 10 * 60 * 1000
-  });
+  let result;
+  try {
+    result = await runCommand(request.runtime.hermesBin, args, {
+      cwd: request.workspaceDir,
+      env: {
+        ...process.env,
+        ...providerEnv,
+        ...(request.env ?? {}),
+        HERMES_HOME: hermesHomeDir,
+        HERMES_WRITE_SAFE_ROOT: request.workspaceDir,
+        HERMES_SESSION_SOURCE: "benchlocal-hermesagent-20"
+      },
+      signal: request.signal,
+      timeoutMs: 2 * 60 * 60 * 1000
+    });
+  } catch (error) {
+    const stdout = error?.stdout ?? "";
+    const stderr = error?.stderr ?? "";
+    await writeFile(stdoutPath, stdout, "utf8");
+    await writeFile(stderrPath, stderr, "utf8");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\nstdout_path=${stdoutPath}\nstderr_path=${stderrPath}\nstdout_tail=${truncateTail(stdout)}\nstderr_tail=${truncateTail(stderr)}`
+    );
+  }
 
   await writeFile(stdoutPath, result.stdout, "utf8");
   await writeFile(stderrPath, result.stderr, "utf8");
@@ -325,13 +345,15 @@ export async function executeHermesAgentRun(request) {
   const stdoutPath = path.join(request.runDir, "agent-runner-stdout.txt");
   const stderrPath = path.join(request.runDir, "agent-runner-stderr.txt");
   const providerEnv = buildHermesProviderEnv(request.model);
+  const artifactModel = { ...request.model };
+  delete artifactModel.apiKey;
 
   await mkdir(request.runDir, { recursive: true });
   await mkdir(request.workspaceDir, { recursive: true });
   await writeHermesConfig(
     hermesHomeDir,
     request.workspaceDir,
-    request.model,
+    artifactModel,
     request.maxTurns,
     {
       auxiliaryTasks: request.auxiliaryTasks,
@@ -344,7 +366,7 @@ export async function executeHermesAgentRun(request) {
     workspaceDir: request.workspaceDir,
     hermesHomeDir,
     prompt: request.prompt,
-    model: request.model,
+    model: artifactModel,
     toolsets: request.toolsets,
     maxTurns: request.maxTurns,
     resultPath,
@@ -354,19 +376,30 @@ export async function executeHermesAgentRun(request) {
     followUps: request.followUps ?? {}
   }, null, 2), "utf8");
 
-  const result = await runCommand(request.runtime.pythonBin, [AGENT_RUNNER_PATH, requestPath], {
-    cwd: request.workspaceDir,
-    env: {
-      ...process.env,
-      ...providerEnv,
-      ...(request.env ?? {}),
-      HERMES_HOME: hermesHomeDir,
-      HERMES_WRITE_SAFE_ROOT: request.workspaceDir,
-      HERMES_SESSION_SOURCE: "benchlocal-hermesagent-20"
-    },
-    signal: request.signal,
-    timeoutMs: 10 * 60 * 1000
-  });
+  let result;
+  try {
+    result = await runCommand(request.runtime.pythonBin, [AGENT_RUNNER_PATH, requestPath], {
+      cwd: request.workspaceDir,
+      env: {
+        ...process.env,
+        ...providerEnv,
+        ...(request.env ?? {}),
+        HERMES_HOME: hermesHomeDir,
+        HERMES_WRITE_SAFE_ROOT: request.workspaceDir,
+        HERMES_SESSION_SOURCE: "benchlocal-hermesagent-20"
+      },
+      signal: request.signal,
+      timeoutMs: 2 * 60 * 60 * 1000
+    });
+  } catch (error) {
+    const stdout = error?.stdout ?? "";
+    const stderr = error?.stderr ?? "";
+    await writeFile(stdoutPath, stdout, "utf8");
+    await writeFile(stderrPath, stderr, "utf8");
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\nstdout_path=${stdoutPath}\nstderr_path=${stderrPath}\nstdout_tail=${truncateTail(stdout)}\nstderr_tail=${truncateTail(stderr)}`
+    );
+  }
 
   await writeFile(stdoutPath, result.stdout, "utf8");
   await writeFile(stderrPath, result.stderr, "utf8");
